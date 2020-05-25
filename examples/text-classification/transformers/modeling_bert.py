@@ -202,6 +202,8 @@ class BertSelfAttention(nn.Module):
         self.synthesizer = config.synthesizer # bool: 是否使用synthesizer架構
         self.mix = config.mix # 確定使用synthesizer時，是否使用mix的作法（7個head用synthesizer，剩下的用本來的full attention或是變體）
         self.full_att = config.full_att # bool: 是否使用本來的full attention
+        self.all_rand = config.all_rand # bool: rand 是否全部都random init
+        self.hand_crafted = config.hand_crafted # bool: rand hand_crafted的數量
 
 
         if self.synthesizer:
@@ -211,7 +213,7 @@ class BertSelfAttention(nn.Module):
             # self.dense_attn = Dense_projection(config.hidden_size, self.seq_len) # 兩層的dense，把hidden state直接做成attention score
             # self.conv1 = Conv_1(self.attention_head_size, self.seq_len) # 一層的conv_1d，把hidden state直接做成attention score
             if self.mix:
-                self.R = Rand_par(self.seq_len, 7, config.rand_nonatt)
+                self.R = Rand_par(self.seq_len, self.hand_crafted, self.hand_crafted, config.rand_nonatt)
                 if self.full_att:
                     self.query = nn.Linear(config.hidden_size, self.all_head_size)
                     self.key = nn.Linear(config.hidden_size, self.all_head_size)
@@ -219,7 +221,7 @@ class BertSelfAttention(nn.Module):
                     # 本來的 full attention的變體，先把hidden state弄成12head的形狀（batch, 12, seq_len, 768/12）再投影
                     self.query_ = nn.Linear(self.attention_head_size, self.attention_head_size)
             else:
-                self.R = Rand_par(self.seq_len, 12, config.rand_nonatt) # nn.Parameter, （head數, seq_len, seq_len）的矩陣，直接拿出來就是attention score
+                self.R = Rand_par(self.seq_len, self.num_attention_heads, self.hand_crafted, config.rand_nonatt, self.all_rand) # nn.Parameter, （head數, seq_len, seq_len）的矩陣，直接拿出來就是attention score
         else:
             if self.full_att:
                 self.query = nn.Linear(config.hidden_size, self.all_head_size)
@@ -253,18 +255,18 @@ class BertSelfAttention(nn.Module):
                 if self.full_att:
                     mixed_query_layer = self.query(hidden_states)
                     mixed_key_layer = self.key(hidden_states)
-                    query_layer = self.transpose_for_scores(mixed_query_layer)[:, 7:, :, :]
-                    key_layer = self.transpose_for_scores(mixed_key_layer)[:, 7:, :, :]
+                    query_layer = self.transpose_for_scores(mixed_query_layer)[:, self.hand_crafted:, :, :]
+                    key_layer = self.transpose_for_scores(mixed_key_layer)[:, self.hand_crafted:, :, :]
                     attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2)) / math.sqrt(self.attention_head_size)
                 else:
                     hidden_transposed = self.transpose_for_scores(hidden_states)
-                    hidden_transposed = hidden_transposed[:, 7:, :, :]
+                    hidden_transposed = hidden_transposed[:, self.hand_crafted:, :, :]
                     query_layer = self.query_(hidden_transposed)
                     attention_scores = torch.matmul(query_layer, query_layer.transpose(-1, -2)) / math.sqrt(self.attention_head_size)
 
                 attention_scores = torch.cat((self.R.R + attention_mask, attention_scores + attention_mask), axis=1)
             else:
-                attention_scores = self.R.R
+                attention_scores = self.R.R + attention_mask
         else:
             if self.full_att:
                 mixed_query_layer = self.query(hidden_states)
@@ -279,7 +281,7 @@ class BertSelfAttention(nn.Module):
                 # Take the dot product between "query" and "key" to get the raw attention scores.
                 attention_scores = torch.matmul(query_layer, query_layer.transpose(-1, -2))
 
-            attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+            attention_scores = attention_scores / math.sqrt(self.attention_head_size) + attention_mask
 
 
         if attention_mask is not None:
@@ -356,7 +358,7 @@ class BertAttention(nn.Module):
             hidden_states, attention_mask, head_mask, encoder_hidden_states, encoder_attention_mask
         )
         attention_output = self.output(self_outputs[0], hidden_states)
-        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
+        outputs = (attention_output,) #+ self_outputs[1:]  # add attentions if we output them
         return outputs
 
 
@@ -745,8 +747,9 @@ class BertModel(BertPreTrainedModel):
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
-        extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, input_shape, device)
-
+        extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(
+            attention_mask, input_shape, self.device
+        )
         # If a 2D ou 3D attention mask is provided for the cross-attention
         # we need to make broadcastabe to [batch_size, num_heads, seq_length, seq_length]
         if self.config.is_decoder and encoder_hidden_states is not None:
@@ -1119,7 +1122,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
 
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.classifier = nn.Linear(config.hidden_size, self.config.num_labels)
 
         self.init_weights()
 
