@@ -474,7 +474,13 @@ class Trainer:
                     steps_trained_in_current_epoch -= 1
                     continue
 
-                tr_loss += self._training_step(model, inputs, optimizer)
+                if (step+1) % 5 == 0:
+                    # print("every 5 steps")
+                    tr_loss += self._training_step(model, inputs, optimizer,step)
+                else:
+                    # print("other steps")
+
+                    tr_loss += self._training_step(model, inputs, optimizer,step)
 
                 if (step + 1) % self.args.gradient_accumulation_steps == 0 or (
                     # last step in epoch but step is always smaller than gradient_accumulation_steps
@@ -565,12 +571,15 @@ class Trainer:
 
     def _training_step(
         self, model: nn.Module, inputs: Dict[str, torch.Tensor], optimizer: torch.optim.Optimizer
-    ) -> float:
+    ,steps:int ) -> float:
         model.train()
         for k, v in inputs.items():
             inputs[k] = v.to(self.args.device)
+        if steps % 5 ==0:
+            outputs = model(**inputs,every_five_steps=True)
+        else:
+            outputs = model(**inputs)
 
-        outputs = model(**inputs)
         loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
         if self.args.n_gpu > 1:

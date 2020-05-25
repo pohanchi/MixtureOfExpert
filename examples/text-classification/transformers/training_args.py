@@ -53,14 +53,17 @@ class TrainingArguments:
 
 
     ###################################################################################################
+ 
+    pretrained: bool = field(default=False, metadata={"help": "Use pretrained model."})
     albert: bool = field(default=False, metadata={"help": "Use albert"})
 
     # args for attention modules 
-
     rand_nonatt: float = field(default=-1.0, metadata={"help": "rand_nonatt."})
     full_att: bool = field(default=False, metadata={"help": "Use qk full attention"})
     synthesizer: bool = field(default=False, metadata={"help": "Use SYNTHESIZER"})
     mix: bool = field(default=False, metadata={"help": "mix with input aware attn when using SYNTHESIZER"})
+    all_rand: bool = field(default=False, metadata={"help": "SYNTHESIZER random to be all rand init"})
+    hand_crafted: int = field(default=7, metadata={"help": "SYNTHESIZER random num of hand-crafted heads"})
 
     ###################################################################################################
 
@@ -74,10 +77,10 @@ class TrainingArguments:
         default=False, metadata={"help": "Run evaluation during training at each logging step."},
     )
 
-    per_gpu_train_batch_size: int = field(default=5, metadata={"help": "Batch size per GPU/CPU for training."})
-    per_gpu_eval_batch_size: int = field(default=5, metadata={"help": "Batch size per GPU/CPU for evaluation."})
+    per_gpu_train_batch_size: int = field(default=17, metadata={"help": "Batch size per GPU/CPU for training."})
+    per_gpu_eval_batch_size: int = field(default=17, metadata={"help": "Batch size per GPU/CPU for evaluation."})
     gradient_accumulation_steps: int = field(
-        default=17,
+        default=5,
         metadata={"help": "Number of updates steps to accumulate before performing a backward/update pass."},
     )
 

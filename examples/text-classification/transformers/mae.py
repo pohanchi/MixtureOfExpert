@@ -8,7 +8,7 @@ import torch.nn as nn
 from itertools import combinations
 from .modeling_albert import *
 from torch.nn.functional import gelu
-
+from torch.distributions import Categorical
 
 class MixtureOfExpert(nn.Module):
     def __init__(self, hidden_size, num_groups, per_head_num, total_head_num):
@@ -19,13 +19,13 @@ class MixtureOfExpert(nn.Module):
         self.per_head_num = per_head_num
         self.total_head_num = total_head_num
         self.scaleup_factor = self.total_head_num / self.per_head_num
-        self.index_groups = list(map(list, combinations(range(num_groups), per_head_num)))
+        self.index_groups = torch.tensor(list(map(list, combinations(range(num_groups), per_head_num))))
         self.dense1 = nn.Linear(hidden_size, num_groups)
         self.actFN = gelu
         self.dense2 = nn.Linear(num_groups, num_groups)
         self.softmax = nn.Softmax(-1)
 
-    def forward(self, input_data_seq, batch_head_matrix):
+    def forward(self, input_data_seq, batch_head_matrix, evaluate=False, every_five_steps=False):
 
         input_data_mean = torch.mean(input_data_seq, dim=1)
         hidden1 = self.dense1(input_data_mean)
@@ -35,15 +35,34 @@ class MixtureOfExpert(nn.Module):
 
         scaleup = self.scaleup_factor * batch_head_matrix
 
-        prob_multiply_head = [
+        if evaluate:
+            prob_multiply_head = [
             torch.sum(
                 prob[:, i,None,None].expand(-1, input_data_seq.shape[1], self.total_head_num - 1).unsqueeze(-1).cuda() *
-                torch.index_select(scaleup, 2, torch.tensor(self.index_groups[i]).cuda()),
+                torch.index_select(scaleup, 2, self.index_groups[i].cuda()),
                 dim=-2)
             for i in range(12)
         ]
+            prob_matrix = torch.sum(torch.stack(prob_multiply_head), dim=0)
+        else:
+            if every_five_steps:
+                prob_multiply_head = [
+                torch.sum(
+                prob[:, i,None,None].expand(-1, input_data_seq.shape[1], self.total_head_num - 1).unsqueeze(-1).cuda() *
+                torch.index_select(scaleup, 2, self.index_groups[i].cuda()),
+                dim=-2)
+                for i in range(12)
+                ]
+                prob_matrix = torch.sum(torch.stack(prob_multiply_head), dim=0)
+            else:
 
-        prob_matrix = torch.sum(torch.stack(prob_multiply_head), dim=0)
+                batch_indexes = Categorical(prob).sample()
+                index_selection = self.index_groups[batch_indexes].cuda()
+                batch_head_seq_hidden = torch.stack([torch.index_select(scaleup[i,:,:,:], 1, index_selection[i]) for i in range(input_data_seq.shape[0])],dim=0)
+                prob_matrix= torch.sum(batch_head_seq_hidden,dim=2)
+
+                
+                
 
         return prob, prob_matrix, batch_head_matrix
 
