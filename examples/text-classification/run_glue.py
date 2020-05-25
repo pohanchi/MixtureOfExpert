@@ -19,15 +19,21 @@
 import dataclasses
 import logging
 import os
-import sys
 from dataclasses import dataclass, field
 from typing import Dict, Optional
-
+import pdb 
+import IPython
 import numpy as np
 
-from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction, GlueDataset
-from transformers import GlueDataTrainingArguments as DataTrainingArguments
 from transformers import (
+    AutoConfig,
+    AutoModelForSequenceClassification,
+    BertForSequenceClassification,
+    AlbertForSequenceClassification,
+    AutoTokenizer,
+    EvalPrediction,
+    GlueDataset,
+    GlueDataTrainingArguments,
     HfArgumentParser,
     Trainer,
     TrainingArguments,
@@ -66,14 +72,8 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
-
-    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
-        # If we pass only one argument to the script and it's the path to a json file,
-        # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
-    else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ModelArguments, GlueDataTrainingArguments, TrainingArguments))
+    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     if (
         os.path.exists(training_args.output_dir)
@@ -116,27 +116,49 @@ def main():
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
 
-    config = AutoConfig.from_pretrained(
-        model_args.config_name if model_args.config_name else model_args.model_name_or_path,
-        num_labels=num_labels,
-        finetuning_task=data_args.task_name,
-        cache_dir=model_args.cache_dir,
-    )
+    if training_args.albert:
+        config = AutoConfig.from_pretrained(
+            'albert-base-v2',
+            num_labels=num_labels,
+            finetuning_task=data_args.task_name,
+            cache_dir=model_args.cache_dir,
+        )
+    else:
+        config = AutoConfig.from_pretrained(
+            model_args.config_name if model_args.config_name else model_args.model_name_or_path,
+            num_labels=num_labels,
+            finetuning_task=data_args.task_name,
+            cache_dir=model_args.cache_dir,
+        )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
     )
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-        cache_dir=model_args.cache_dir,
-    )
+
+
+    config.rand_nonatt = training_args.rand_nonatt
+    config.full_att = training_args.full_att
+    config.synthesizer = training_args.synthesizer
+    config.mix = training_args.mix
+
+    if training_args.albert:
+        model = AlbertForSequenceClassification(config=config)
+    else:
+        model = BertForSequenceClassification(config=config)
 
     # Get datasets
-    train_dataset = GlueDataset(data_args, tokenizer=tokenizer) if training_args.do_train else None
-    eval_dataset = GlueDataset(data_args, tokenizer=tokenizer, evaluate=True) if training_args.do_eval else None
 
+    train_dataset = (
+        GlueDataset(data_args, tokenizer=tokenizer,)
+        if training_args.do_train
+        else None
+    )
+    eval_dataset = (
+        GlueDataset(data_args, tokenizer=tokenizer, evaluate=True)
+        if training_args.do_eval
+        else None
+    )
+    
     def compute_metrics(p: EvalPrediction) -> Dict:
         if output_mode == "classification":
             preds = np.argmax(p.predictions, axis=1)
@@ -166,14 +188,16 @@ def main():
 
     # Evaluation
     results = {}
-    if training_args.do_eval:
+    if training_args.do_eval and training_args.local_rank in [-1, 0]:
         logger.info("*** Evaluate ***")
 
         # Loop to handle MNLI double evaluation (matched, mis-matched)
         eval_datasets = [eval_dataset]
         if data_args.task_name == "mnli":
             mnli_mm_data_args = dataclasses.replace(data_args, task_name="mnli-mm")
-            eval_datasets.append(GlueDataset(mnli_mm_data_args, tokenizer=tokenizer, evaluate=True))
+            eval_datasets.append(
+                GlueDataset(mnli_mm_data_args, tokenizer=tokenizer, local_rank=training_args.local_rank, evaluate=True)
+            )
 
         for eval_dataset in eval_datasets:
             result = trainer.evaluate(eval_dataset=eval_dataset)
@@ -181,21 +205,15 @@ def main():
             output_eval_file = os.path.join(
                 training_args.output_dir, f"eval_results_{eval_dataset.args.task_name}.txt"
             )
-            if trainer.is_world_master():
-                with open(output_eval_file, "w") as writer:
-                    logger.info("***** Eval results {} *****".format(eval_dataset.args.task_name))
-                    for key, value in result.items():
-                        logger.info("  %s = %s", key, value)
-                        writer.write("%s = %s\n" % (key, value))
+            with open(output_eval_file, "w") as writer:
+                logger.info("***** Eval results {} *****".format(eval_dataset.args.task_name))
+                for key, value in result.items():
+                    logger.info("  %s = %s", key, value)
+                    writer.write("%s = %s\n" % (key, value))
 
             results.update(result)
 
     return results
-
-
-def _mp_fn(index):
-    # For xla_spawn (TPUs)
-    main()
 
 
 if __name__ == "__main__":

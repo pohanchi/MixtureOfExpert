@@ -65,7 +65,16 @@ instance/
 
 # Scrapy stuff:
 .scrapy
-
+*.tsv
+*.lock
+cached*
+*.jsonl
+*.txt
+checkpoint*
+*.bin
+*.json 
+*.model
+*.pohan
 # Sphinx documentation
 docs/_build/
 
