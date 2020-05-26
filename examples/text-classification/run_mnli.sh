@@ -1,0 +1,16 @@
+CUDA_VISIBLE_DEVICES=1 python run_glue.py \
+--per_gpu_train_batch_size 34 \
+--per_gpu_eval_batch_size 34 \
+--gradient_accumulation_steps 5 \
+--wandb_name mnli-synthesizer-full_att-mix-nomae \
+--full_att \
+--mix \
+--albert \
+--synthesizer \
+--do_train \
+--do_eval \
+--evaluate_during_training \
+--output_dir output/MNLI-mix-nomae \
+--model_name_or_path albert-base-v2 \
+--task_name MNLI \
+--data_dir data_mnli/MNLI 

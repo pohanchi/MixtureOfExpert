@@ -135,19 +135,40 @@ def main():
         cache_dir=model_args.cache_dir,
     )
 
+    config.pretrained = training_args.pretrained
 
     config.rand_nonatt = training_args.rand_nonatt
     config.full_att = training_args.full_att
     config.synthesizer = training_args.synthesizer
     config.mix = training_args.mix
+    config.all_rand = training_args.all_rand
+    config.hand_crafted = training_args.hand_crafted
 
-    if training_args.albert:
-        model = AlbertForSequenceClassification(config=config)
+
+    if training_args.pretrained:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            config=config,
+            cache_dir=model_args.cache_dir,
+        )
+        # if training_args.synthesizer:
+        #     if training_args.full_att:
+        #         for i in range(12):
+        #             tmp_key = model.bert.encoder.layer[i].attention.self.key.weight
+        #             tmp_query = model.bert.encoder.layer[i].attention.self.query.weight
+        #             tmp_key = tmp_key[:, :]
+
+
+        # import pdb;pdb.set_trace()
     else:
-        model = BertForSequenceClassification(config=config)
+        if training_args.albert:
+            model = AlbertForSequenceClassification(config=config)
+        else:
+            model = BertForSequenceClassification(config=config)
 
+    # model = BertForSequenceClassification.from_pretrained('out/lsh/test_ialsh-8/checkpoint-1000', config=
     # Get datasets
-
     train_dataset = (
         GlueDataset(data_args, tokenizer=tokenizer,)
         if training_args.do_train
