@@ -26,7 +26,7 @@ from .configuration_albert import AlbertConfig
 from .file_utils import add_start_docstrings, add_start_docstrings_to_callable
 from .modeling_bert import ACT2FN, BertEmbeddings, BertSelfAttention, prune_linear_layer
 from .modeling_utils import PreTrainedModel
-from .mae import MixtureOfExpert
+from .mae import MixtureOfExpert, MixtureAttentionWeightExpert
 import IPython 
 import pdb
 
@@ -195,6 +195,8 @@ class AlbertAttention(BertSelfAttention):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.mae = MixtureOfExpert(config.hidden_size, config.num_attention_heads, config.num_attention_heads-1, config.num_attention_heads)
+        self.maae = MixtureAttentionWeightExpert(config.hidden_size, config.num_attention_heads, 12, config.num_attention_heads)
+
         self.pruned_heads = set()
 
     def prune_heads(self, heads):
@@ -260,6 +262,7 @@ class AlbertAttention(BertSelfAttention):
         # Normalize the attention scores to probabilities.
         attention_probs = nn.Softmax(dim=-1)(attention_scores)
 
+
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
         attention_probs = self.dropout(attention_probs)
@@ -267,10 +270,17 @@ class AlbertAttention(BertSelfAttention):
         # Mask heads if we want to
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
+        
 
-        context_layer = torch.matmul(attention_probs, value_layer)
 
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+        prob, context_layer, value_layer = self.maae(input_ids,attention_probs, value_layer,evaluate=evaluate, every_five_steps=every_five_steps)
+
+        # IPython.embed()
+        # pdb.set_trace()                
+
+        # context_layer = torch.matmul(attention_probs, value_layer)
+
+        # context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
 
         # Should find a better way to do this
         w = (
@@ -285,6 +295,7 @@ class AlbertAttention(BertSelfAttention):
         # projected_context_layer = torch.einsum("bfnd,ndh->bfnh", context_layer, w)
         
         # prob, projected_context_layer, batch_head_matrix = self.mae(input_ids,projected_context_layer,evaluate=evaluate, every_five_steps=every_five_steps)
+        # prob, projected_context_layer, batch_head_matrix = self.maae(input_ids,projected_context_layer,evaluate=evaluate, every_five_steps=every_five_steps)
 
         projected_context_layer_dropout = self.dropout(projected_context_layer)
         layernormed_context_layer = self.LayerNorm(input_ids + projected_context_layer_dropout)

@@ -2,8 +2,7 @@
 import torch
 import numpy as np
 import tensorflow as tf
-import pdb
-import IPython
+import ipdb
 import torch.nn as nn
 from itertools import combinations
 from .modeling_albert import *
@@ -63,6 +62,68 @@ class MixtureOfExpert(nn.Module):
                 prob_matrix = torch.sum(scaleup, dim=2) - sampled
 
         return prob, prob_matrix, batch_head_matrix
+
+class MixtureAttentionWeightExpert(nn.Module):
+    def __init__(self, hidden_size, num_groups, per_head_num, total_head_num):
+        super().__init__()
+
+        self.num_groups = num_groups
+        self.per_head_num = per_head_num
+        self.short_hidden_size = int(hidden_size / self.per_head_num)
+        self.total_head_num = total_head_num
+        self.scaleup_factor = 1 / self.per_head_num
+        self.dense1 = nn.Linear(self.short_hidden_size, num_groups)
+        self.actFN = gelu
+        self.dense2 = nn.Linear(num_groups, num_groups)
+        self.softmax = nn.Softmax(-1)
+
+    def forward(self, input_data_seq, attention_probs,  value_layer, evaluate=False, every_five_steps=False):
+
+        input_data_mean = torch.mean(input_data_seq, dim=1)
+        input_data_12_split= input_data_mean.reshape(input_data_mean.shape[0], 12, self.short_hidden_size)
+        hidden1 = self.dense1(input_data_12_split)
+        hiddenact1 = self.actFN(hidden1)
+        hidden2 = self.dense2(hiddenact1)
+        prob = self.softmax(hidden2)
+        
+
+        scaleup = self.scaleup_factor * attention_probs
+
+        w = torch.matmul(scaleup, value_layer)
+        context = w.permute(0, 2, 1, 3).contiguous()
+
+        if evaluate:
+            prob_multiply_head = [
+            torch.sum(prob[:, i].unsqueeze(1).expand(input_data_seq.shape[0], input_data_seq.shape[1], 12).unsqueeze(-1).cuda() *
+                context.cuda(),
+                dim=-2)
+            for i in range(12)
+            ]
+
+            prob_matrix = torch.stack(prob_multiply_head).permute(2,0,1,3).reshape(input_data_seq.shape[0],input_data_seq.shape[1],input_data_seq.shape[2])
+
+        else:
+            if every_five_steps:
+                prob_multiply_head = [
+                torch.sum(prob[:, i].unsqueeze(1).expand(input_data_seq.shape[0], input_data_seq.shape[1], 12).unsqueeze(-1).cuda() *
+                context.cuda(),
+                dim=-2)
+                for i in range(12)
+                ]
+
+                prob_matrix = torch.stack(prob_multiply_head).permute(2,0,1,3).reshape(input_data_seq.shape[0],input_data_seq.shape[1],input_data_seq.shape[2])
+            else:
+
+                scaleup = scaleup / self.scaleup_factor  
+
+                batch_indexes = Categorical(prob).sample()
+
+                scaleup = torch.stack([torch.index_select(scaleup[i],0,batch_indexes[i]) for i in range(input_data_seq.shape[0])], dim=0)
+
+                w = torch.matmul(scaleup, value_layer)
+                context = w.permute(0, 2, 1, 3).contiguous()
+
+        return prob, context, value_layer
 
 
 class AlbertAttention_MAE(BertSelfAttention):
