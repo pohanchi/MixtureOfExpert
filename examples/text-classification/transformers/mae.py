@@ -57,12 +57,10 @@ class MixtureOfExpert(nn.Module):
             else:
 
                 batch_indexes = Categorical(prob).sample()
-                index_selection = self.index_groups[batch_indexes].cuda()
-                batch_head_seq_hidden = torch.stack([torch.index_select(scaleup[i,:,:,:], 1, index_selection[i]) for i in range(input_data_seq.shape[0])],dim=0)
-                prob_matrix= torch.sum(batch_head_seq_hidden,dim=2)
-
-                
-                
+                # prob_matrix = torch.sum(batch_head_seq_hidden,dim=2)
+                sampled_ind = batch_indexes + torch.range(0, len(batch_indexes)-1).cuda().to(torch.long) * scaleup.shape[2]
+                sampled = scaleup.permute(0, 2, 1, 3).reshape(-1, 128, 768)[sampled_ind]
+                prob_matrix = torch.sum(scaleup, dim=2) - sampled
 
         return prob, prob_matrix, batch_head_matrix
 

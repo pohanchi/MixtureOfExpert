@@ -280,9 +280,11 @@ class AlbertAttention(BertSelfAttention):
         )
         b = self.dense.bias.to(context_layer.dtype)
 
-        projected_context_layer = torch.einsum("bfnd,ndh->bfnh", context_layer, w)
+        projected_context_layer = torch.einsum("bfnd,ndh->bfh", context_layer, w)
+
+        # projected_context_layer = torch.einsum("bfnd,ndh->bfnh", context_layer, w)
         
-        prob, projected_context_layer, batch_head_matrix = self.mae(input_ids,projected_context_layer,evaluate=evaluate, every_five_steps=every_five_steps)
+        # prob, projected_context_layer, batch_head_matrix = self.mae(input_ids,projected_context_layer,evaluate=evaluate, every_five_steps=every_five_steps)
 
         projected_context_layer_dropout = self.dropout(projected_context_layer)
         layernormed_context_layer = self.LayerNorm(input_ids + projected_context_layer_dropout)

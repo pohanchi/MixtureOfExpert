@@ -28,7 +28,13 @@ from .activations import gelu, gelu_new, swish
 from .configuration_bert import BertConfig
 from .file_utils import add_start_docstrings, add_start_docstrings_to_callable
 from .modeling_utils import PreTrainedModel, prune_linear_layer
-
+# from .IALSH import IALSHAttention16
+# from .SimpleLSH import SimpleLSHAttention, SimpleLSHAttention16
+# from .SimpleALSH import SimpleALSHAttention16
+# from .XBOX import XBOXAttention16
+# from .SparseAttention import SparseAttentionStrided
+# from .RoutingAttention import RoutingAttention
+import pdb
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +185,228 @@ class BertEmbeddings(nn.Module):
         embeddings = self.dropout(embeddings)
         return embeddings
 
+def _gen_indexes(indexes_flatten):
+    ret = torch.zeros_like(indexes_flatten[0])
+    pre_j = -1
+    for i,j in enumerate(indexes_flatten[0]):
+        if j == pre_j:
+            tmp += 1
+        else:
+            tmp = 0
+        pre_j = j
+        ret[i] = tmp
+    return ret
+
+def attn(a, mask, p):
+    # import pdb 
+    # pdb.set_trace()
+    mask_flatten = mask.view(-1, mask.shape[-1])
+    p_flatten = p.view(mask_flatten.shape)
+    indexes_flatten = torch.where(mask_flatten==0)
+    mask_mode = torch.mode(mask_flatten)[0]
+    mask_mode_num = ((mask_flatten - mask_mode[:,None]).abs()==0).sum(-1)
+    # pad = mask_mode_num.max()
+    indexes_order_flatten = _gen_indexes(indexes_flatten)
+    pad = indexes_order_flatten.max() + 1
+    h_matrix = (torch.ones(mask_flatten.shape[0], pad) * -10000).to(pad.device)
+
+    h_matrix[(indexes_flatten[0], indexes_order_flatten)] = p_flatten[indexes_flatten]
+    softmax_part_flatten = torch.nn.Softmax(-1)(h_matrix)
+    softmax_full_flatten = torch.zeros_like(p_flatten)
+    softmax_full_flatten[indexes_flatten] = softmax_part_flatten[(indexes_flatten[0], indexes_order_flatten)]
+    softmax_full = softmax_full_flatten.view(p.shape)
+    ret = torch.matmul(softmax_full,a)
+    assert ret.size() == a.size()
+    # import pdb
+    # pdb.set_trace()
+    return ret
+
+
+class Dense_projection(nn.Module):
+    def __init__(self, attention_head_size, seq_len):
+        super().__init__()
+        self.dense1 = nn.Linear(attention_head_size, 16)
+        self.dense2 = nn.Linear(16, seq_len)
+        self.act = ACT2FN['relu']
+
+    def forward(
+        self,
+        hidden_states
+    ):
+        res = self.act(self.dense1(hidden_states))
+        res = self.dense2(res)
+        return res
+
+class Conv_projection(nn.Module):
+    def __init__(self, attention_head_size, seq_len):
+        super().__init__()
+        self.dense1 = nn.Conv1d(seq_len, 16)
+        self.dense2 = nn.Conv1d(16, seq_len)
+        self.act = ACT2FN['relu']
+
+    def forward(
+        self,
+        hidden_states
+    ):
+        res = self.act(self.dense1(hidden_states))
+        res = self.dense2(res)
+        return res
+
+
+class Conv_1(nn.Module):
+    def __init__(self, attention_head_size, seq_len):
+        super().__init__()
+        self.conv1 = nn.Conv1d(attention_head_size, seq_len, 5, padding=2, padding_mode='replicate')
+
+    def forward(
+        self,
+        hidden_states
+    ):
+        res = self.conv1(hidden_states.permute(0, 2, 1))
+        return res
+
+
+class Rand_par(nn.Module):
+    def __init__(self, seq_len, num_attention_heads, hand_crafted, noatt, all_rand=False, requires_grad=True):
+        super(Rand_par, self).__init__()
+
+        assert(num_attention_heads >= hand_crafted)
+
+        if all_rand:
+            self.R = nn.Parameter(torch.randn((num_attention_heads, seq_len, seq_len)).normal_(mean=0, std=1), requires_grad=requires_grad)
+        elif hand_crafted == 7:
+            rand_att = list()
+
+            rand_att.append(torch.eye(seq_len))
+            rand_att.append(torch.roll(torch.eye(seq_len), 1, -1))
+            rand_att.append(torch.roll(torch.eye(seq_len), -1, -1))
+
+            tmp = torch.pow(torch.range(0, seq_len-1)+1, 3).unsqueeze(0).expand(seq_len, -1)
+            mask = torch.tril(torch.roll(torch.tril(1.0-torch.eye(seq_len)), -1, -1))
+            mask[-1][-1] = 0.0
+            tm = tmp*mask
+            
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+            
+            mask = torch.triu(torch.roll(torch.triu(1.0-torch.eye(seq_len)), 1, -1))
+            mask[1][1] = 0.0
+            tm = tmp*mask
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            tm = tmp
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            tmp = torch.pow(torch.flip(torch.range(0, seq_len-1)+1, (0,)), 3).unsqueeze(0).expand(seq_len, -1)
+
+            tm = tmp
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            R = torch.stack(rand_att)
+
+            R[torch.where(R == 0)] = noatt
+
+            if num_attention_heads > hand_crafted:
+                self.R = torch.cat((R, torch.randn((num_attention_heads-hand_crafted, seq_len, seq_len)).normal_(mean=0, std=1)), dim=0)
+            else:
+                self.R = R
+            self.R = nn.Parameter(self.R, requires_grad=requires_grad)
+        elif hand_crafted == 11:
+            rand_att = list()
+
+            l = math.floor(seq_len ** 0.5)
+            local_mask = torch.ones(seq_len, seq_len)
+            local_mask = torch.triu(local_mask, -l).permute(1, 0)
+            local_mask = torch.triu(local_mask, -l)
+
+            x = torch.arange(seq_len).unsqueeze(-1).to(torch.float32)
+            y = x.permute(1, 0)
+            z = torch.zeros(seq_len, seq_len)
+            q = z + x
+            k = z + y
+            c1 = q >= k
+            c2 = (torch.fmod(q-k, l) == 0)
+            global_mask = c2.to(torch.float32)
+
+            rand_att.append(torch.eye(seq_len))
+            rand_att.append(torch.roll(torch.eye(seq_len), 1, -1))
+            rand_att.append(torch.roll(torch.eye(seq_len), -1, -1))
+            rand_att.append(local_mask)
+            rand_att.append(global_mask)
+            # rand_att.append(torch.roll(global_mask, 1, -1))
+            # # rand_att.append(torch.roll(global_mask, 2, -1))
+            # rand_att.append(torch.roll(global_mask, -1, -1))
+
+            num_of_block = math.ceil(seq_len / l)
+
+            small_block = np.ones([l, l])
+            _tmp = [small_block for _ in range(num_of_block)]
+            local_mask = block_diag(*_tmp)
+            
+            local_mask = local_mask[:seq_len, :seq_len] * 10000. - 10000.
+            local_mask = torch.tensor(local_mask, dtype=torch.float32)
+
+            global_mask = torch.zeros(seq_len, seq_len)
+            global_mask[:, l-1::l] = 1.
+            global_mask = global_mask * 10000. -10000.
+
+            rand_att.append(local_mask)
+            rand_att.append(global_mask)
+
+            tmp = torch.pow(torch.range(0, seq_len-1)+1, 3).unsqueeze(0).expand(seq_len, -1)
+            mask = torch.tril(torch.roll(torch.tril(1.0-torch.eye(seq_len)), -1, -1))
+            mask[-1][-1] = 0.0
+            tm = tmp*mask
+            
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            
+            mask = torch.triu(torch.roll(torch.triu(1.0-torch.eye(seq_len)), 1, -1))
+            mask[1][1] = 0.0
+            tm = tmp*mask
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            tm = tmp
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            tmp = torch.pow(torch.flip(torch.range(0, seq_len-1)+1, (0,)), 3).unsqueeze(0).expand(seq_len, -1)
+
+            tm = tmp
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            R = torch.stack(rand_att)
+
+            R[torch.where(R == 0)] = noatt
+
+            if num_attention_heads > hand_crafted:
+                self.R = torch.cat((R, torch.randn((num_attention_heads-hand_crafted, seq_len, seq_len)).normal_(mean=0, std=1)), dim=0)
+            else:
+                self.R = R
+            self.R = nn.Parameter(self.R, requires_grad=requires_grad)
+
 
 class BertSelfAttention(nn.Module):
     def __init__(self, config):
@@ -204,7 +432,6 @@ class BertSelfAttention(nn.Module):
         self.full_att = config.full_att # bool: 是否使用本來的full attention
         self.all_rand = config.all_rand # bool: rand 是否全部都random init
         self.hand_crafted = config.hand_crafted # bool: rand hand_crafted的數量
-
 
         if self.synthesizer:
             self.seq_len = 128 # synthesizer系列的module (random initialized/had-crafted 的attention score 或是 直接把hiddenstate餵進dense/conv 產生attention score) 會用到
@@ -284,9 +511,9 @@ class BertSelfAttention(nn.Module):
             attention_scores = attention_scores / math.sqrt(self.attention_head_size) + attention_mask
 
 
-        if attention_mask is not None:
-            # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
-            attention_scores = attention_scores + attention_mask
+        # if attention_mask is not None:
+        #     # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
+        #     attention_scores = attention_scores + attention_mask
 
         attention_probs = nn.Softmax(dim=-1)(attention_scores)
 
@@ -298,8 +525,6 @@ class BertSelfAttention(nn.Module):
 
         outputs = (context_layer, attention_probs) if self.output_attentions else (context_layer,)
         return outputs
-
-
 
 
 class BertSelfOutput(nn.Module):
