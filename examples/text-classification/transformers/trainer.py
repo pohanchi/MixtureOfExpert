@@ -22,9 +22,12 @@ from tqdm.auto import tqdm, trange
 from .data.data_collator import DataCollator, DefaultDataCollator
 from .modeling_utils import PreTrainedModel
 from .optimization import AdamW, get_linear_schedule_with_warmup
+from torch.optim import SGD
 from .trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, PredictionOutput, TrainOutput
 from .training_args import TrainingArguments, is_tpu_available
 
+import IPython 
+import pdb
 
 try:
     from apex import amp
@@ -179,6 +182,7 @@ class Trainer:
         prediction_loss_only=False,
         tb_writer: Optional["SummaryWriter"] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = None,
+        optimizer_gate: torch.optim.Optimizer = None,
     ):
         """
         Trainer is a simple but feature-complete training and eval loop for PyTorch,
@@ -199,6 +203,8 @@ class Trainer:
         self.compute_metrics = compute_metrics
         self.prediction_loss_only = prediction_loss_only
         self.optimizers = optimizers
+        self.optimizer_gate = optimizer_gate
+
         if tb_writer is not None:
             self.tb_writer = tb_writer
         elif is_tensorboard_available() and self.is_world_master():
@@ -313,19 +319,33 @@ class Trainer:
         no_decay = ["bias", "LayerNorm.weight"]
         optimizer_grouped_parameters = [
             {
-                "params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay) and "mae" not in n and "maae" not in n],
                 "weight_decay": self.args.weight_decay,
             },
             {
-                "params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)],
+                "params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay) and "mae" not in n and "maae" not in n],
                 "weight_decay": 0.0,
             },
         ]
+
+        optimizer_gate_grouped_param = [
+              {
+                "params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay) and ("mae" in n or "maae" in n)],
+                "weight_decay": self.args.weight_decay,
+            },
+            {
+                "params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay) and ("mae" in n or "maae" not in n)],
+                "weight_decay": 0.0,
+            },  
+        ]
+
+
         optimizer = AdamW(optimizer_grouped_parameters, lr=self.args.learning_rate, eps=self.args.adam_epsilon)
+        other_optimizer = SGD(optimizer_gate_grouped_param, lr=1)
         scheduler = get_linear_schedule_with_warmup(
             optimizer, num_warmup_steps=self.args.warmup_steps, num_training_steps=num_training_steps
         )
-        return optimizer, scheduler
+        return optimizer, scheduler, other_optimizer
 
     def _setup_wandb(self):
         """
@@ -380,7 +400,7 @@ class Trainer:
             t_total = int(len(train_dataloader) // self.args.gradient_accumulation_steps * self.args.num_train_epochs)
             num_train_epochs = self.args.num_train_epochs
 
-        optimizer, scheduler = self.get_optimizers(num_training_steps=t_total)
+        optimizer, scheduler, other_optimizer = self.get_optimizers(num_training_steps=t_total)
 
         # Check if saved optimizer or scheduler states exist
         if (
@@ -496,6 +516,7 @@ class Trainer:
                         xm.optimizer_step(optimizer)
                     else:
                         optimizer.step()
+                        other_optimizer.step()
 
                     scheduler.step()
                     model.zero_grad()
@@ -571,7 +592,7 @@ class Trainer:
 
     def _training_step(
         self, model: nn.Module, inputs: Dict[str, torch.Tensor], optimizer: torch.optim.Optimizer
-    ,steps:int ) -> float:
+    ,steps:int,) -> float:
         model.train()
         for k, v in inputs.items():
             inputs[k] = v.to(self.args.device)

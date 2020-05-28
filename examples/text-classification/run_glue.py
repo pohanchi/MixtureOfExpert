@@ -143,6 +143,8 @@ def main():
     config.mix = training_args.mix
     config.all_rand = training_args.all_rand
     config.hand_crafted = training_args.hand_crafted
+    config.mae = training_args.mae
+    config.mmae= training_args.mmae
 
 
     if training_args.pretrained:
@@ -217,7 +219,7 @@ def main():
         if data_args.task_name == "mnli":
             mnli_mm_data_args = dataclasses.replace(data_args, task_name="mnli-mm")
             eval_datasets.append(
-                GlueDataset(mnli_mm_data_args, tokenizer=tokenizer, local_rank=training_args.local_rank, evaluate=True)
+                GlueDataset(mnli_mm_data_args, tokenizer=tokenizer, evaluate=True)
             )
 
         for eval_dataset in eval_datasets:

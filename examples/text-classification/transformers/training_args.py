@@ -64,6 +64,8 @@ class TrainingArguments:
     mix: bool = field(default=False, metadata={"help": "mix with input aware attn when using SYNTHESIZER"})
     all_rand: bool = field(default=False, metadata={"help": "SYNTHESIZER random to be all rand init"})
     hand_crafted: int = field(default=7, metadata={"help": "SYNTHESIZER random num of hand-crafted heads"})
+    mmae: bool =field(default=False, metadata={"help": "incoporate Mixture of Attention weight into each attention head"})
+    mae: bool =field(default=False, metadata={"help": "incoporate Mixture of Attention head"})
 
     ###################################################################################################
 
