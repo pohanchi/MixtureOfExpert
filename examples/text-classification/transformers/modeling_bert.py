@@ -23,6 +23,8 @@ import os
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
+import numpy as np
+from scipy.linalg import block_diag
 
 from .activations import gelu, gelu_new, swish
 from .configuration_bert import BertConfig
@@ -36,31 +38,32 @@ from .modeling_utils import PreTrainedModel, prune_linear_layer
 # from .RoutingAttention import RoutingAttention
 import pdb
 
+
 logger = logging.getLogger(__name__)
 
 BERT_PRETRAINED_MODEL_ARCHIVE_MAP = {
-    "bert-base-uncased": "https://cdn.huggingface.co/bert-base-uncased-pytorch_model.bin",
-    "bert-large-uncased": "https://cdn.huggingface.co/bert-large-uncased-pytorch_model.bin",
-    "bert-base-cased": "https://cdn.huggingface.co/bert-base-cased-pytorch_model.bin",
-    "bert-large-cased": "https://cdn.huggingface.co/bert-large-cased-pytorch_model.bin",
-    "bert-base-multilingual-uncased": "https://cdn.huggingface.co/bert-base-multilingual-uncased-pytorch_model.bin",
-    "bert-base-multilingual-cased": "https://cdn.huggingface.co/bert-base-multilingual-cased-pytorch_model.bin",
-    "bert-base-chinese": "https://cdn.huggingface.co/bert-base-chinese-pytorch_model.bin",
-    "bert-base-german-cased": "https://cdn.huggingface.co/bert-base-german-cased-pytorch_model.bin",
-    "bert-large-uncased-whole-word-masking": "https://cdn.huggingface.co/bert-large-uncased-whole-word-masking-pytorch_model.bin",
-    "bert-large-cased-whole-word-masking": "https://cdn.huggingface.co/bert-large-cased-whole-word-masking-pytorch_model.bin",
-    "bert-large-uncased-whole-word-masking-finetuned-squad": "https://cdn.huggingface.co/bert-large-uncased-whole-word-masking-finetuned-squad-pytorch_model.bin",
-    "bert-large-cased-whole-word-masking-finetuned-squad": "https://cdn.huggingface.co/bert-large-cased-whole-word-masking-finetuned-squad-pytorch_model.bin",
-    "bert-base-cased-finetuned-mrpc": "https://cdn.huggingface.co/bert-base-cased-finetuned-mrpc-pytorch_model.bin",
-    "bert-base-german-dbmdz-cased": "https://cdn.huggingface.co/bert-base-german-dbmdz-cased-pytorch_model.bin",
-    "bert-base-german-dbmdz-uncased": "https://cdn.huggingface.co/bert-base-german-dbmdz-uncased-pytorch_model.bin",
-    "bert-base-japanese": "https://cdn.huggingface.co/cl-tohoku/bert-base-japanese/pytorch_model.bin",
-    "bert-base-japanese-whole-word-masking": "https://cdn.huggingface.co/cl-tohoku/bert-base-japanese-whole-word-masking/pytorch_model.bin",
-    "bert-base-japanese-char": "https://cdn.huggingface.co/cl-tohoku/bert-base-japanese-char/pytorch_model.bin",
-    "bert-base-japanese-char-whole-word-masking": "https://cdn.huggingface.co/cl-tohoku/bert-base-japanese-char-whole-word-masking/pytorch_model.bin",
-    "bert-base-finnish-cased-v1": "https://cdn.huggingface.co/TurkuNLP/bert-base-finnish-cased-v1/pytorch_model.bin",
-    "bert-base-finnish-uncased-v1": "https://cdn.huggingface.co/TurkuNLP/bert-base-finnish-uncased-v1/pytorch_model.bin",
-    "bert-base-dutch-cased": "https://cdn.huggingface.co/wietsedv/bert-base-dutch-cased/pytorch_model.bin",
+    "bert-base-uncased": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-pytorch_model.bin",
+    "bert-large-uncased": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-uncased-pytorch_model.bin",
+    "bert-base-cased": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-cased-pytorch_model.bin",
+    "bert-large-cased": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-cased-pytorch_model.bin",
+    "bert-base-multilingual-uncased": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-multilingual-uncased-pytorch_model.bin",
+    "bert-base-multilingual-cased": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-multilingual-cased-pytorch_model.bin",
+    "bert-base-chinese": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-chinese-pytorch_model.bin",
+    "bert-base-german-cased": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-german-cased-pytorch_model.bin",
+    "bert-large-uncased-whole-word-masking": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-uncased-whole-word-masking-pytorch_model.bin",
+    "bert-large-cased-whole-word-masking": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-cased-whole-word-masking-pytorch_model.bin",
+    "bert-large-uncased-whole-word-masking-finetuned-squad": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-uncased-whole-word-masking-finetuned-squad-pytorch_model.bin",
+    "bert-large-cased-whole-word-masking-finetuned-squad": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-cased-whole-word-masking-finetuned-squad-pytorch_model.bin",
+    "bert-base-cased-finetuned-mrpc": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-cased-finetuned-mrpc-pytorch_model.bin",
+    "bert-base-german-dbmdz-cased": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-german-dbmdz-cased-pytorch_model.bin",
+    "bert-base-german-dbmdz-uncased": "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-german-dbmdz-uncased-pytorch_model.bin",
+    "bert-base-japanese": "https://s3.amazonaws.com/models.huggingface.co/bert/cl-tohoku/bert-base-japanese-pytorch_model.bin",
+    "bert-base-japanese-whole-word-masking": "https://s3.amazonaws.com/models.huggingface.co/bert/cl-tohoku/bert-base-japanese-whole-word-masking-pytorch_model.bin",
+    "bert-base-japanese-char": "https://s3.amazonaws.com/models.huggingface.co/bert/cl-tohoku/bert-base-japanese-char-pytorch_model.bin",
+    "bert-base-japanese-char-whole-word-masking": "https://s3.amazonaws.com/models.huggingface.co/bert/cl-tohoku/bert-base-japanese-char-whole-word-masking-pytorch_model.bin",
+    "bert-base-finnish-cased-v1": "https://s3.amazonaws.com/models.huggingface.co/bert/TurkuNLP/bert-base-finnish-cased-v1/pytorch_model.bin",
+    "bert-base-finnish-uncased-v1": "https://s3.amazonaws.com/models.huggingface.co/bert/TurkuNLP/bert-base-finnish-uncased-v1/pytorch_model.bin",
+    "bert-base-dutch-cased": "https://s3.amazonaws.com/models.huggingface.co/bert/wietsedv/bert-base-dutch-cased/pytorch_model.bin",
 }
 
 
@@ -185,6 +188,7 @@ class BertEmbeddings(nn.Module):
         embeddings = self.dropout(embeddings)
         return embeddings
 
+
 def _gen_indexes(indexes_flatten):
     ret = torch.zeros_like(indexes_flatten[0])
     pre_j = -1
@@ -195,30 +199,6 @@ def _gen_indexes(indexes_flatten):
             tmp = 0
         pre_j = j
         ret[i] = tmp
-    return ret
-
-def attn(a, mask, p):
-    # import pdb 
-    # pdb.set_trace()
-    mask_flatten = mask.view(-1, mask.shape[-1])
-    p_flatten = p.view(mask_flatten.shape)
-    indexes_flatten = torch.where(mask_flatten==0)
-    mask_mode = torch.mode(mask_flatten)[0]
-    mask_mode_num = ((mask_flatten - mask_mode[:,None]).abs()==0).sum(-1)
-    # pad = mask_mode_num.max()
-    indexes_order_flatten = _gen_indexes(indexes_flatten)
-    pad = indexes_order_flatten.max() + 1
-    h_matrix = (torch.ones(mask_flatten.shape[0], pad) * -10000).to(pad.device)
-
-    h_matrix[(indexes_flatten[0], indexes_order_flatten)] = p_flatten[indexes_flatten]
-    softmax_part_flatten = torch.nn.Softmax(-1)(h_matrix)
-    softmax_full_flatten = torch.zeros_like(p_flatten)
-    softmax_full_flatten[indexes_flatten] = softmax_part_flatten[(indexes_flatten[0], indexes_order_flatten)]
-    softmax_full = softmax_full_flatten.view(p.shape)
-    ret = torch.matmul(softmax_full,a)
-    assert ret.size() == a.size()
-    # import pdb
-    # pdb.set_trace()
     return ret
 
 
@@ -274,7 +254,26 @@ class Rand_par(nn.Module):
 
         if all_rand:
             self.R = nn.Parameter(torch.randn((num_attention_heads, seq_len, seq_len)).normal_(mean=0, std=1), requires_grad=requires_grad)
-        elif hand_crafted == 7:
+        elif hand_crafted == 1:
+            rand_att = list()
+            num_of_block = 2
+            l = int(seq_len / num_of_block)
+            small_block = np.ones([l, l])
+            _tmp = [small_block for _ in range(num_of_block)]
+            local_mask = block_diag(*_tmp)
+            local_mask = torch.tensor(local_mask, dtype=torch.float32)
+            rand_att.append(local_mask)
+
+            R = torch.stack(rand_att)
+
+            R[torch.where(R == 0)] = noatt
+
+            if num_attention_heads > hand_crafted:
+                self.R = torch.cat((R, torch.randn((num_attention_heads-hand_crafted, seq_len, seq_len)).normal_(mean=0, std=1)), dim=0)
+            else:
+                self.R = R
+            self.R = nn.Parameter(self.R, requires_grad=requires_grad)
+        elif hand_crafted == 12:
             rand_att = list()
 
             rand_att.append(torch.eye(seq_len))
@@ -312,6 +311,167 @@ class Rand_par(nn.Module):
             sum_[torch.where(sum_ == 0)] = 1
             tm = tm / sum_.unsqueeze(-1)
             rand_att.append(tm)
+
+
+            l = math.floor(seq_len ** 0.5)
+            local_mask = torch.ones(seq_len, seq_len)
+            local_mask = torch.triu(local_mask, -l).permute(1, 0)
+            local_mask = torch.triu(local_mask, -l)
+
+            x = torch.arange(seq_len).unsqueeze(-1).to(torch.float32)
+            y = x.permute(1, 0)
+            z = torch.zeros(seq_len, seq_len)
+            q = z + x
+            k = z + y
+            c1 = q >= k
+            c2 = (torch.fmod(q-k, l) == 0)
+            global_mask = c2.to(torch.float32)
+
+            rand_att.append(local_mask)
+            rand_att.append(global_mask)
+
+            num_of_block = math.ceil(seq_len / l)
+            small_block = np.ones([l, l])
+            _tmp = [small_block for _ in range(num_of_block)]
+            local_mask = block_diag(*_tmp)
+            local_mask = local_mask[:seq_len, :seq_len]
+            local_mask = torch.tensor(local_mask, dtype=torch.float32)
+
+            global_mask = torch.zeros(seq_len, seq_len)
+            global_mask[:, l-1::l] = 1.
+
+            rand_att.append(local_mask)
+            rand_att.append(global_mask)
+
+            num_of_block = 2
+            l = int(seq_len / num_of_block)
+            small_block = np.ones([l, l])
+            _tmp = [small_block for _ in range(num_of_block)]
+            local_mask = block_diag(*_tmp)
+            local_mask = local_mask[:seq_len, :seq_len] * (-noatt) - (-noatt)
+            local_mask = torch.tensor(local_mask, dtype=torch.float32)
+
+            rand_att.append(local_mask)
+
+            R = torch.stack(rand_att)
+
+            # R *= torch.randn(R.shape).normal_(mean=0, std=1)
+
+            R[torch.where(R == 0)] = noatt
+
+            self.R = R
+            self.R = nn.Parameter(self.R, requires_grad=requires_grad)
+        elif hand_crafted == 7:
+            rand_att = list()
+
+
+            num_of_block = 2
+            l = int(seq_len / num_of_block)
+            small_block = np.ones([l, l])
+            _tmp = [small_block for _ in range(num_of_block)]
+            local_mask = block_diag(*_tmp)
+            local_mask = torch.tensor(local_mask, dtype=torch.float32)
+            rand_att.append(local_mask)
+
+            # rand_att.append(torch.eye(seq_len))
+            rand_att.append(torch.roll(torch.eye(seq_len), 1, -1))
+            rand_att.append(torch.roll(torch.eye(seq_len), -1, -1))
+
+            tmp = torch.pow(torch.range(0, seq_len-1)+1, 3).unsqueeze(0).expand(seq_len, -1)
+            mask = torch.tril(torch.roll(torch.tril(1.0-torch.eye(seq_len)), -1, -1))
+            mask[-1][-1] = 0.0
+            tm = tmp*mask
+            
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+            
+            mask = torch.triu(torch.roll(torch.triu(1.0-torch.eye(seq_len)), 1, -1))
+            mask[1][1] = 0.0
+            tm = tmp*mask
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            tm = tmp
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            tmp = torch.pow(torch.flip(torch.range(0, seq_len-1)+1, (0,)), 3).unsqueeze(0).expand(seq_len, -1)
+
+            tm = tmp
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            rand_att.append(tm)
+
+            R = torch.stack(rand_att)
+
+            R[torch.where(R == 0)] = noatt
+
+            if num_attention_heads > hand_crafted:
+                self.R = torch.cat((R, torch.randn((num_attention_heads-hand_crafted, seq_len, seq_len)).normal_(mean=0, std=1)), dim=0)
+            else:
+                self.R = R
+            self.R = nn.Parameter(self.R, requires_grad=requires_grad)
+        elif hand_crafted == 8:
+            rand_att = list()
+
+            # rand_att.append(torch.eye(seq_len))
+            # rand_att.append(torch.roll(torch.eye(seq_len), 1, -1))
+            # rand_att.append(torch.roll(torch.eye(seq_len), -1, -1))
+
+            tmp = torch.pow(torch.range(0, seq_len-1)+1, 3).unsqueeze(0).expand(seq_len, -1)
+            mask = torch.tril(torch.roll(torch.tril(1.0-torch.eye(seq_len)), -1, -1))
+            mask[-1][-1] = 0.0
+            tm = tmp*mask
+            
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            # rand_att.append(tm)
+            
+            mask = torch.triu(torch.roll(torch.triu(1.0-torch.eye(seq_len)), 1, -1))
+            mask[1][1] = 0.0
+            tm = tmp*mask
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            # rand_att.append(tm)
+
+            tm = tmp
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            # rand_att.append(tm)
+
+            tmp = torch.pow(torch.flip(torch.range(0, seq_len-1)+1, (0,)), 3).unsqueeze(0).expand(seq_len, -1)
+
+            tm = tmp
+            sum_ = tm.sum(axis=-1)
+            sum_[torch.where(sum_ == 0)] = 1
+            tm = tm / sum_.unsqueeze(-1)
+            # rand_att.append(tm)
+
+            num_of_block = 2
+            l = int(seq_len / num_of_block)
+            small_block = np.ones([l, l])
+            _tmp = [small_block for _ in range(num_of_block)]
+            local_mask = block_diag(*_tmp)
+            local_mask = torch.tensor(local_mask, dtype=torch.float32)
+
+            rand_att.append(local_mask)
+            rand_att.append(local_mask)
+            rand_att.append(local_mask)
+            rand_att.append(local_mask)
+            rand_att.append(local_mask)
+            rand_att.append(local_mask)
+            rand_att.append(local_mask)
+            rand_att.append(local_mask)
 
             R = torch.stack(rand_att)
 
@@ -433,6 +593,7 @@ class BertSelfAttention(nn.Module):
         self.all_rand = config.all_rand # bool: rand 是否全部都random init
         self.hand_crafted = config.hand_crafted # bool: rand hand_crafted的數量
 
+
         if self.synthesizer:
             self.seq_len = 128 # synthesizer系列的module (random initialized/had-crafted 的attention score 或是 直接把hiddenstate餵進dense/conv 產生attention score) 會用到
             
@@ -441,6 +602,9 @@ class BertSelfAttention(nn.Module):
             # self.conv1 = Conv_1(self.attention_head_size, self.seq_len) # 一層的conv_1d，把hidden state直接做成attention score
             if self.mix:
                 self.R = Rand_par(self.seq_len, self.hand_crafted, self.hand_crafted, config.rand_nonatt)
+                if self.hand_crafted == 12:
+                    self.dense_mix = nn.Linear(self.seq_len, self.num_attention_heads)
+                    self.counter = 0
                 if self.full_att:
                     self.query = nn.Linear(config.hidden_size, self.all_head_size)
                     self.key = nn.Linear(config.hidden_size, self.all_head_size)
@@ -479,25 +643,44 @@ class BertSelfAttention(nn.Module):
 
         if self.synthesizer:
             if self.mix:
-                if self.full_att:
-                    mixed_query_layer = self.query(hidden_states)
-                    mixed_key_layer = self.key(hidden_states)
-                    query_layer = self.transpose_for_scores(mixed_query_layer)[:, self.hand_crafted:, :, :]
-                    key_layer = self.transpose_for_scores(mixed_key_layer)[:, self.hand_crafted:, :, :]
-                    attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2)) / math.sqrt(self.attention_head_size)
-                else:
-                    hidden_transposed = self.transpose_for_scores(hidden_states)
-                    hidden_transposed = hidden_transposed[:, self.hand_crafted:, :, :]
-                    query_layer = self.query_(hidden_transposed)
-                    attention_scores = torch.matmul(query_layer, query_layer.transpose(-1, -2)) / math.sqrt(self.attention_head_size)
+                if self.hand_crafted == 12:
+                    device = attention_mask.device
+                    mask = torch.where(attention_mask == -10000.0, torch.tensor(0., device=device), torch.tensor(1., device=device))
 
-                attention_scores = torch.cat((self.R.R + attention_mask, attention_scores + attention_mask), axis=1)
+                    probs = nn.Softmax(dim=-1)(self.R.R)
+                    tmp = (self.transpose_for_scores(hidden_states)*mask.squeeze(2).unsqueeze(-1)).sum(axis=-1)
+                    # import pdb;pdb.set_trace()
+                    tmp = tmp / mask.squeeze(2).sum(axis=-1, keepdim=True)
+                    self.counter += 1
+                    if (self.counter % 10) == 0: 
+                        mix_weight = nn.Softmax(dim=-1)(self.dense_mix(tmp))
+                    else:
+                        mix_weight = nn.Softmax(dim=-1)(self.dense_mix(tmp)).detach()
+                    mix_weight = self.dropout(mix_weight)
+                    attention_probs = torch.tensordot(mix_weight, probs, dims=1)
+                    attention_probs *= mask
+                else:
+                    if self.full_att:
+                        mixed_query_layer = self.query(hidden_states)
+                        mixed_key_layer = self.key(hidden_states)
+                        query_layer = self.transpose_for_scores(mixed_query_layer)[:, self.hand_crafted:, :, :]
+                        key_layer = self.transpose_for_scores(mixed_key_layer)[:, self.hand_crafted:, :, :]
+                        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2)) / math.sqrt(self.attention_head_size)
+                    else:
+                        hidden_transposed = self.transpose_for_scores(hidden_states)
+                        hidden_transposed = hidden_transposed[:, self.hand_crafted:, :, :]
+                        query_layer = self.query_(hidden_transposed)
+                        attention_scores = torch.matmul(query_layer, query_layer.transpose(-1, -2)) / math.sqrt(self.attention_head_size)
+
+                    attention_scores = torch.cat((self.R.R + attention_mask, attention_scores + attention_mask), axis=1)
+                    attention_probs = nn.Softmax(dim=-1)(attention_scores)
             else:
-                attention_scores = self.R.R + attention_mask
+                    attention_scores = self.R.R + attention_mask
+                    attention_probs = nn.Softmax(dim=-1)(attention_scores)
         else:
             if self.full_att:
-                mixed_query_layer = self.query(hidden_states)
-                mixed_key_layer = self.key(hidden_states)
+                mixed_query_layer = self.query(hidden_states).detach()
+                mixed_key_layer = self.key(hidden_states).detach()
                 query_layer = self.transpose_for_scores(mixed_query_layer)
                 key_layer = self.transpose_for_scores(mixed_key_layer)
                 attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
@@ -509,13 +692,12 @@ class BertSelfAttention(nn.Module):
                 attention_scores = torch.matmul(query_layer, query_layer.transpose(-1, -2))
 
             attention_scores = attention_scores / math.sqrt(self.attention_head_size) + attention_mask
+            attention_probs = nn.Softmax(dim=-1)(attention_scores)
 
 
-        # if attention_mask is not None:
-        #     # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
-        #     attention_scores = attention_scores + attention_mask
+        
 
-        attention_probs = nn.Softmax(dim=-1)(attention_scores)
+        attention_probs = self.dropout(attention_probs)
 
         context_layer = torch.matmul(attention_probs, value_layer)
 
@@ -545,8 +727,10 @@ class BertAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.self = BertSelfAttention(config)
+        # self.lsh = IALSHAttention()
         self.output = BertSelfOutput(config)
         self.pruned_heads = set()
+
 
     def prune_heads(self, heads):
         if len(heads) == 0:
@@ -975,6 +1159,7 @@ class BertModel(BertPreTrainedModel):
         extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(
             attention_mask, input_shape, self.device
         )
+
         # If a 2D ou 3D attention mask is provided for the cross-attention
         # we need to make broadcastabe to [batch_size, num_heads, seq_length, seq_length]
         if self.config.is_decoder and encoder_hidden_states is not None:
@@ -1226,28 +1411,6 @@ class BertForMaskedLM(BertPreTrainedModel):
             outputs = (ltr_lm_loss,) + outputs
 
         return outputs  # (ltr_lm_loss), (masked_lm_loss), prediction_scores, (hidden_states), (attentions)
-
-    def prepare_inputs_for_generation(self, input_ids, attention_mask=None, **model_kwargs):
-        input_shape = input_ids.shape
-        effective_batch_size = input_shape[0]
-
-        # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
-        if attention_mask is None:
-            attention_mask = input_ids.new_ones(input_shape)
-
-        # if model is does not use a causal mask then add a dummy token
-        if self.config.is_decoder is False:
-            assert self.config.pad_token_id is not None, "The PAD token should be defined for generation"
-            attention_mask = torch.cat(
-                [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))], dim=-1
-            )
-
-            dummy_token = torch.full(
-                (effective_batch_size, 1), self.config.pad_token_id, dtype=torch.long, device=input_ids.device
-            )
-            input_ids = torch.cat([input_ids, dummy_token], dim=1)
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
 
 
 @add_start_docstrings(
