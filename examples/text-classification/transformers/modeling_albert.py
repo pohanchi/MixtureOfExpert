@@ -196,7 +196,8 @@ class AlbertAttention(BertSelfAttention):
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.mae = MixtureOfExpert(config.hidden_size, config.num_attention_heads, config.num_attention_heads-1, config.num_attention_heads)
         self.maae = MixtureAttentionWeightExpert(config.hidden_size, config.num_attention_heads, 12, config.num_attention_heads)
-
+        self.config_mae = config.mae
+        self.config_mmae = config.mmae
         self.pruned_heads = set()
 
     def prune_heads(self, heads):
@@ -272,16 +273,12 @@ class AlbertAttention(BertSelfAttention):
             attention_probs = attention_probs * head_mask
         
 
-
-        prob, context_layer, value_layer = self.maae(input_ids,attention_probs, value_layer,evaluate=evaluate, every_five_steps=every_five_steps)
-
-        # IPython.embed()
-        # pdb.set_trace()                
-
-        # context_layer = torch.matmul(attention_probs, value_layer)
-
-        # context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-
+        if self.config_mmae:
+            prob, context_layer, value_layer = self.maae(input_ids,attention_probs, value_layer,evaluate=evaluate, every_five_steps=every_five_steps)
+        else:
+            context_layer = torch.matmul(attention_probs, value_layer)
+            context_layer = context_layer.permute(0, 2, 1, 3).contiguous()  
+            
         # Should find a better way to do this
         w = (
             self.dense.weight.t()
@@ -290,12 +287,15 @@ class AlbertAttention(BertSelfAttention):
         )
         b = self.dense.bias.to(context_layer.dtype)
 
-        projected_context_layer = torch.einsum("bfnd,ndh->bfh", context_layer, w)
-
         # projected_context_layer = torch.einsum("bfnd,ndh->bfnh", context_layer, w)
-        
-        # prob, projected_context_layer, batch_head_matrix = self.mae(input_ids,projected_context_layer,evaluate=evaluate, every_five_steps=every_five_steps)
-        # prob, projected_context_layer, batch_head_matrix = self.maae(input_ids,projected_context_layer,evaluate=evaluate, every_five_steps=every_five_steps)
+        if self.config_mae:      
+            context_layer_2=context_layer.reshape(context_layer.shape[0]*context_layer.shape[1],context_layer.shape[2],context_layer.shape[3]).unsqueeze(-1)
+            projected_context_input=torch.sum(context_layer_2 * w,dim=-2).reshape(context_layer.shape[0],context_layer.shape[1],context_layer.shape[2],-1)
+            prob, projected_context_layer, batch_head_matrix = self.mae(input_ids,projected_context_input,evaluate=evaluate, every_five_steps=every_five_steps)
+        else:
+            context_layer = context_layer.reshape(context_layer.shape[0],context_layer.shape[1], context_layer.shape[2] * context_layer.shape[3])
+            w1 = w.reshape(self.num_attention_heads * self.attention_head_size, self.hidden_size)
+            projected_context_layer = torch.matmul(context_layer, w1)
 
         projected_context_layer_dropout = self.dropout(projected_context_layer)
         layernormed_context_layer = self.LayerNorm(input_ids + projected_context_layer_dropout)
